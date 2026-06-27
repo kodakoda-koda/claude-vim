@@ -1,0 +1,15 @@
+[package]
+name = "claude-vim"
+version = "0.1.0"
+edition = "2024"
+description = "Vim-modal wrapper for Claude Code"
+license = "MIT"
+
+[[bin]]
+name = "cv"
+path = "src/main.rs"
+
+[dependencies]
+portable-pty = "0.8"
+crossterm = "0.27"
+vte = "0.13"
