@@ -6,10 +6,11 @@ description = "Vim-modal wrapper for Claude Code"
 license = "MIT"
 
 [[bin]]
-name = "cv"
+name = "claude-vim"
 path = "src/main.rs"
 
 [dependencies]
 portable-pty = "0.8"
 crossterm = "0.27"
-vte = "0.13"
+anyhow = "1"
+signal-hook = "0.3"

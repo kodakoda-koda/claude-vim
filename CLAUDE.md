@@ -2,147 +2,69 @@
 
 ## プロジェクト概要
 
-`cv` は Claude Code に vim のモーダル操作を追加するスタンドアロンの PTY ラッパー。Neovim やプラグインには依存しない単一バイナリ。
+`cv` は Claude Code に vim のモーダル操作を追加する PTY ラッパー。単一バイナリ、ターミナル非依存。
 
-```
-Insert mode  →  Claude Code への完全パススルー（通常の Claude Code 操作）
-Esc          →  Normal mode（Kitty の scroll API で会話履歴を vim キーでスクロール）
-i            →  Insert mode に戻る
-```
+- Normal mode: スクロール（SGR マウスイベント経由）+ control/esc seq 透過
+- Insert mode: テキスト入力（raw passthrough、Enter→改行変換）
 
-## ロードマップ
-
-| バージョン | スコープ |
-|---|---|
-| **v0.1** | Kitty 限定。基本的な Insert/Normal mode + vim スクロール |
-| **v0.2** | tmux・WezTerm など他ターミナル対応、Visual mode + yank |
-
-## 確定した設計方針
-
-### v0.1 は Kitty 専用
-
-他ターミナルへの対応は v0.2 以降。将来的には起動時にターミナルを検出して以下のように分岐する想定：
-
-```
-$KITTY_WINDOW_ID あり  → kitty @ scroll-window（v0.1 実装済み）
-tmux セッション内       → tmux copy-mode（v0.2）
-WezTerm               → wezterm cli（v0.2）
-それ以外              → 自前 alternate screen viewer（v0.2）
-```
-
-### Normal mode のスクロールは Kitty remote control を使う
-
-**最重要の設計決定。**
-
-当初は Normal mode で alternate screen に切り替えて自前の scrollback viewer を表示する案を検討したが、**「見た目は Claude Code のままにしたい」** という要件のため、Kitty の remote control API を使うアプローチに確定した。
-
-```bash
-kitty @ scroll-window up 5 lines    # Ctrl+U
-kitty @ scroll-window down 5 lines  # Ctrl+D
-```
-
-- Normal mode に入っても画面は切り替わらない
-- Claude Code の TUI がそのまま見える状態でスクロールできる
-- ユーザーは Kitty を使用しているため、Kitty 依存は許容される
-
-**前提条件:** ユーザーの `~/.config/kitty/kitty.conf` に以下が必要：
-
-```
-allow_remote_control yes
-listen_on unix:/tmp/mykitty  # または socket
-```
-
-### Visual mode は v0.2 以降に延期
-
-Kitty scroll API アプローチでは Visual mode によるテキスト選択の実装が難しい（alternate screen を使わないため）。v0.1 スコープから除外。
-
-## アーキテクチャ
-
-```
-┌─────────────────────────────────────────────────┐
-│  cv (wrapper process)                           │
-│                                                 │
-│  Insert mode:                                   │
-│    stdin ──→ PTY(claude)                        │
-│    PTY(claude) ──→ stdout                       │
-│                                                 │
-│  Normal mode:                                   │
-│    vim keys ──→ kitty @ scroll-window           │
-│    Esc/i/etc ──→ mode 切替                      │
-│    その他のキー ──→ 無視（PTY には送らない）    │
-└──────────────┬──────────────────────────────────┘
-               │ PTY
-┌──────────────▼──────────────────────────────────┐
-│  claude (subprocess)                            │
-└─────────────────────────────────────────────────┘
-```
-
-**モード切替の仕組み:**
-- `Esc` → キーのインターセプト開始、以降の入力を vim キーとして解釈
-- `i` → インターセプト解除、Insert mode 復帰（Claude Code への passthrough 再開）
-- Claude Code のプロセスは両モードで常に動き続ける
-
-## ファイル構成（実装予定）
+## ファイル構成
 
 ```
 src/
-├── main.rs    - エントリポイント。ターミナルサイズ取得、raw mode 設定
-├── app.rs     - メインイベントループ。モード管理、イベントの振り分け
-├── pty.rs     - portable-pty で claude をサブプロセス起動、reader/writer スレッド
-├── kitty.rs   - kitty @ scroll-window コマンドのラッパー
-└── input.rs   - Normal mode のキーバインド処理
+├── main.rs        エントリポイント。raw mode、PTY 起動、SIGWINCH
+├── app.rs         イベントループ。モード管理、Esc 検出（50ms timeout）
+├── pty.rs         portable-pty で claude 起動、smcup フィルタ
+├── scroll.rs      SGR マウスイベントでスクロール（Scroller）
+├── input.rs       Normal mode キーマッチング（raw bytes → InputAction）
+└── statusline.rs  lualine 風ステータスライン（モード・ブランチ・バージョン）
 ```
 
-`term.rs` と `ui.rs` は alternate screen viewer アプローチを使わないため不要になった。
-
-## 主要な依存 crate
-
-- `portable-pty` — PTY 管理（WezTerm 製）
-- `crossterm` — raw mode、キー入力
-
-`vte` は alternate screen viewer を作らないため不要。
-
-## キーバインド（確定）
-
-| キー | Normal mode での動作 |
-|------|---------------------|
-| `Esc` | Insert → Normal |
-| `i` | Normal → Insert |
-| `j` | 1行下スクロール |
-| `k` | 1行上スクロール |
-| `Ctrl+d` | 半ページ下 |
-| `Ctrl+u` | 半ページ上 |
-| `Ctrl+f` | 全ページ下 |
-| `Ctrl+b` | 全ページ上 |
-| `g g` | 最上部へ |
-| `G` | 最下部へ（最新出力） |
-
-## Issues との対応
-
-| Issue | 内容 | バージョン | 状態 |
-|-------|------|-----------|------|
-| #1 | PTY wrapper infrastructure | v0.1 | 未着手 |
-| #2 | Insert mode: raw passthrough | v0.1 | 未着手 |
-| #3 | Normal mode: Kitty scroll API | v0.1 | 未着手 |
-| #4 | Vim navigation keys | v0.1 | 未着手 |
-| #5 | Visual mode and yank | v0.2 | 延期 |
-| #6 | Multi-terminal support | v0.2 | 延期 |
-
-## 開発ワークフロー
-
-- `feat/issue-N-description` ブランチを切って実装 → PR
-- `cargo build` でビルド確認、`cargo clippy` でリント
-
-## ビルド
+## ビルド・実行
 
 ```bash
-cargo build           # debug
-cargo build --release
-./target/debug/cv     # 実行
+cargo build
+cargo clippy
+cargo test
+./target/debug/claude-vim
 ```
+
+## キーバインド
+
+### Insert mode
+| キー | 動作 |
+|------|------|
+| `Esc` / `\x1b[27u` | Normal mode へ |
+| `Enter` | 改行（Shift+Enter に変換） |
+| その他 | raw passthrough |
+
+### Normal mode
+| キー | 動作 |
+|------|------|
+| `i` | Insert mode へ |
+| `j`/`k` | 1行スクロール |
+| `Ctrl+d`/`Ctrl+u` | 半ページ（rows/6 イベント） |
+| `Ctrl+f`/`Ctrl+b` | 全ページ（rows/3 イベント） |
+| `gg` / `G` | 最上部 / 最下部（Ctrl+Home/End） |
+| printable 文字 | 無視 |
+| control/esc seq | PTY へ透過 |
+
+## Issue 対応
+
+| Issue | 内容 | 状態 |
+|-------|------|------|
+| #1 | PTY wrapper infrastructure | v0.1 完了 |
+| #2 | Insert mode: raw passthrough | v0.1 完了 |
+| #3 | Normal mode: SGR マウスイベントスクロール | v0.1 完了 |
+| #4 | Vim navigation keys | v0.1 完了 |
+| #8 | Statusline: lualine-style mode indicator | v0.1 完了 |
+| #5 | Visual mode and yank | v0.2 延期 |
+| #6 | Multi-terminal support | v0.2 延期 |
+| #7 | vte による自前 scrollback viewer | v0.2 延期 |
 
 ## 実装時の注意
 
-- Kitty の socket path は環境変数 `$KITTY_LISTEN_ON` から取得できる（`kitty --listen-on` で起動した場合）
-- `kitty @` コマンドは Kitty が `allow_remote_control yes` でないと動かない。起動時にチェックしてエラーを出すべき
-- Normal mode 中も Claude Code の PTY 出力は流れ続ける（Claude が応答中など）。この出力は Insert mode 復帰時に自動的に表示される
+- Kitty kbd protocol 対応: Esc=`\x1b[27u`、Ctrl+d=`\x1b[100;5u` 等も認識する
+- smcup フィルタはチャンクをまたぐシーケンス未対応（実用上問題なし）
+- PTY 出力後にステータスラインを再描画（SavePosition/RestorePosition）
+- スクロールは 50ms スロットルで加速防止
+- 詳細な設計ドキュメント: [docs/architecture.md](docs/architecture.md)
