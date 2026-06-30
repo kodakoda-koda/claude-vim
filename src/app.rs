@@ -84,7 +84,7 @@ impl App {
                 self.statusline_config.cols = cols;
                 self.scroller.set_size(cols, rows.saturating_sub(1));
                 let _ = self.pty.resize(cols, rows.saturating_sub(1));
-                let _ = render(self.mode, &self.statusline_config, rows - 1);
+                let _ = render(self.mode, &self.statusline_config, rows.saturating_sub(1));
                 let _ = stdout.flush();
             }
 
@@ -97,7 +97,7 @@ impl App {
                 }
             }
             if had_output {
-                let _ = render(self.mode, &self.statusline_config, self.rows - 1);
+                let _ = render(self.mode, &self.statusline_config, self.rows.saturating_sub(1));
                 let _ = stdout.flush();
             }
 
@@ -206,21 +206,6 @@ impl App {
             }
             InputAction::Passthrough(data) => {
                 self.pty.write_bytes(&data)?;
-                if data == b"g" && bytes != data {
-                    let (action2, new_matcher2) = self.input_matcher.process(&bytes);
-                    self.input_matcher = new_matcher2;
-                    if let InputAction::Scroll(amount) = action2 {
-                        let now = Instant::now();
-                        if now.duration_since(self.last_scroll) >= Duration::from_millis(SCROLL_THROTTLE_MS) {
-                            let scroll_data = self.scroller.scroll_bytes(amount);
-                            self.pty.write_bytes(&scroll_data)?;
-                            self.last_scroll = now;
-                        }
-                        return Ok(true);
-                    } else if let InputAction::Passthrough(data2) = action2 {
-                        self.pty.write_bytes(&data2)?;
-                    }
-                }
                 Ok(false)
             }
             InputAction::PendingG | InputAction::Noop => Ok(false),
@@ -230,7 +215,7 @@ impl App {
     fn switch_to_normal(&mut self) -> anyhow::Result<()> {
         self.mode = Mode::Normal;
         self.input_matcher = InputMatcher::new();
-        render(self.mode, &self.statusline_config, self.rows - 1)?;
+        render(self.mode, &self.statusline_config, self.rows.saturating_sub(1))?;
         let _ = std::io::stdout().flush();
         Ok(())
     }
@@ -238,7 +223,7 @@ impl App {
     fn switch_to_insert(&mut self) -> anyhow::Result<()> {
         self.mode = Mode::Insert;
         self.input_matcher = InputMatcher::new();
-        render(self.mode, &self.statusline_config, self.rows - 1)?;
+        render(self.mode, &self.statusline_config, self.rows.saturating_sub(1))?;
         let _ = std::io::stdout().flush();
         Ok(())
     }

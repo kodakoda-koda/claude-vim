@@ -27,8 +27,8 @@ impl Scroller {
 
     /// ScrollAmount に応じたバイト列を生成する。
     pub fn scroll_bytes(&self, amount: ScrollAmount) -> Vec<u8> {
-        let col = self.cols / 2;
-        let row = self.rows / 2;
+        let col = (self.cols / 2).max(1);
+        let row = (self.rows / 2).max(1);
 
         match amount {
             ScrollAmount::LineUp => sgr_scroll_event(MOUSE_SCROLL_UP, col, row),

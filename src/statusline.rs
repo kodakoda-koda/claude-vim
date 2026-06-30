@@ -52,7 +52,7 @@ pub fn build_statusline(mode: Mode, config: &StatuslineConfig) -> String {
     let sep = if config.use_powerline {
         "\u{e0b0}"
     } else {
-        ">"
+        "|"
     };
 
     let mode_str = match mode {
@@ -69,7 +69,6 @@ pub fn build_statusline(mode: Mode, config: &StatuslineConfig) -> String {
     let left = format!("{}{}", mode_str, branch_part);
     let right = format!(" {} ", config.version);
 
-    // 右寄せのためにスペースを計算
     let total_cols = config.cols as usize;
     let left_len = left.chars().count();
     let right_len = right.chars().count();
@@ -79,7 +78,9 @@ pub fn build_statusline(mode: Mode, config: &StatuslineConfig) -> String {
         0
     };
 
-    format!("{}{}{}", left, " ".repeat(padding), right)
+    let result = format!("{}{}{}", left, " ".repeat(padding), right);
+    // cols を超えないようにトランケート
+    result.chars().take(total_cols).collect()
 }
 
 /// ステータスラインをターミナル最下行に描画する。
@@ -152,7 +153,7 @@ mod tests {
     fn test_no_powerline_uses_ascii_separator() {
         let config = make_config(80, "main", false);
         let s = build_statusline(Mode::Normal, &config);
-        assert!(s.contains('>'), "Expected '>' separator in: {}", s);
+        assert!(s.contains('|'), "Expected '|' separator in: {}", s);
     }
 
     #[test]
@@ -171,7 +172,7 @@ mod tests {
         let config = make_config(80, "", false);
         let s = build_statusline(Mode::Normal, &config);
         // ブランチが空のときはセパレーターが出ない
-        assert!(!s.contains('>'), "Expected no separator when branch empty: {}", s);
+        assert!(!s.contains('|'), "Expected no separator when branch empty: {}", s);
     }
 
     #[test]

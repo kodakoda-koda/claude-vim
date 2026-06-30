@@ -57,7 +57,7 @@ fn run_app(cols: u16, rows: u16) -> anyhow::Result<()> {
 
     // ステータスライン設定と初期描画
     let statusline_config = StatuslineConfig::new(cols, branch, false);
-    render(Mode::Insert, &statusline_config, rows - 1)?;
+    render(Mode::Insert, &statusline_config, rows.saturating_sub(1))?;
 
     // 8. Scroller 構築（SGR マウスホイールイベントで PTY にスクロールを送る）
     let scroller = Scroller::new(cols, rows.saturating_sub(1));

@@ -53,11 +53,12 @@ impl InputMatcher {
                     InputAction::Scroll(ScrollAmount::Top),
                     Self { pending_g: false },
                 ),
-                _ => (
-                    // pending だった g を PTY に透過。App 側は現在の入力を再処理する
-                    InputAction::Passthrough(b"g".to_vec()),
-                    Self { pending_g: false },
-                ),
+                _ => {
+                    // pending_g をキャンセルして現在の入力を通常処理する
+                    // g は printable なので PTY に送らない（Noop 扱い）
+                    let new_self = Self { pending_g: false };
+                    new_self.process(bytes)
+                }
             }
         } else {
             match bytes {
@@ -225,13 +226,31 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_g_then_other_key_passthrough_g() {
-        // g → j: pending g をパススルーし、新しい状態は pending_g: false
+    fn test_pending_g_then_j_scrolls() {
+        // g → j: pending_g キャンセル、j を通常処理 → Scroll(LineDown)
         let m = InputMatcher::new();
-        let (_, m2) = m.process(b"g"); // pending_g = true
-        let (action, m3) = m2.process(b"j"); // not g → Passthrough("g")
-        assert_eq!(action, InputAction::Passthrough(b"g".to_vec()));
+        let (_, m2) = m.process(b"g");
+        let (action, m3) = m2.process(b"j");
+        assert_eq!(action, InputAction::Scroll(ScrollAmount::LineDown));
         assert!(!m3.pending_g);
+    }
+
+    #[test]
+    fn test_pending_g_then_i_switches_to_insert() {
+        // g → i: pending_g キャンセル、i を通常処理 → SwitchToInsert
+        let m = InputMatcher::new();
+        let (_, m2) = m.process(b"g");
+        let (action, _) = m2.process(b"i");
+        assert_eq!(action, InputAction::SwitchToInsert);
+    }
+
+    #[test]
+    fn test_pending_g_then_printable_noop() {
+        // g → y: pending_g キャンセル、y は printable → Noop
+        let m = InputMatcher::new();
+        let (_, m2) = m.process(b"g");
+        let (action, _) = m2.process(b"y");
+        assert_eq!(action, InputAction::Noop);
     }
 
     #[test]

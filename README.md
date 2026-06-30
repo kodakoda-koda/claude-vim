@@ -24,7 +24,7 @@ cargo build --release
 
 ## Keybindings
 
-### Normal mode (default on startup)
+### Normal mode
 
 | Key | Action |
 |-----|--------|
