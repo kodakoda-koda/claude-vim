@@ -6,7 +6,7 @@ description = "Vim-modal wrapper for Claude Code"
 license = "MIT"
 
 [[bin]]
-name = "cv"
+name = "claude-vim"
 path = "src/main.rs"
 
 [dependencies]

@@ -19,7 +19,7 @@ Or build from source:
 
 ```bash
 cargo build --release
-./target/release/cv
+./target/release/claude-vim
 ```
 
 ## Keybindings

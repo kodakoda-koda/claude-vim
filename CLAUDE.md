@@ -25,7 +25,7 @@ src/
 cargo build
 cargo clippy
 cargo test
-./target/debug/cv
+./target/debug/claude-vim
 ```
 
 ## キーバインド
