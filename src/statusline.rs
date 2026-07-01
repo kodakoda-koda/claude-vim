@@ -12,8 +12,6 @@ const VERSION: &str = "cv v0.1";
 pub enum Mode {
     Insert,
     Normal,
-    Cursor,
-    Visual,
 }
 
 /// ステータスライン描画の設定
@@ -60,8 +58,6 @@ pub fn build_statusline(mode: Mode, config: &StatuslineConfig) -> String {
     let mode_str = match mode {
         Mode::Normal => " NORMAL ",
         Mode::Insert => " INSERT ",
-        Mode::Cursor => " CURSOR ",
-        Mode::Visual => " VISUAL ",
     };
 
     let branch_part = if config.branch.is_empty() {
@@ -96,8 +92,6 @@ pub fn render(mode: Mode, config: &StatuslineConfig, row: u16) -> anyhow::Result
     let (bg_color, fg_color) = match mode {
         Mode::Normal => (Color::Rgb { r: 100, g: 149, b: 237 }, Color::Rgb { r: 0, g: 0, b: 0 }),
         Mode::Insert => (Color::Rgb { r: 80, g: 200, b: 120 }, Color::Rgb { r: 0, g: 0, b: 0 }),
-        Mode::Cursor => (Color::Rgb { r: 220, g: 180, b: 50 }, Color::Rgb { r: 0, g: 0, b: 0 }),
-        Mode::Visual => (Color::Rgb { r: 190, g: 80, b: 190 }, Color::Rgb { r: 0, g: 0, b: 0 }),
     };
 
     execute!(
@@ -191,12 +185,5 @@ mod tests {
             "Statusline too long: {} chars",
             s.chars().count()
         );
-    }
-
-    #[test]
-    fn test_visual_mode_contains_visual() {
-        let config = make_config(80, "main", false);
-        let s = build_statusline(Mode::Visual, &config);
-        assert!(s.contains("VISUAL"), "Expected 'VISUAL' in: {}", s);
     }
 }

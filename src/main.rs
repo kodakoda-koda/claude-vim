@@ -2,7 +2,6 @@ mod app;
 mod input;
 mod scroll;
 mod pty;
-mod screen;
 mod statusline;
 
 use std::sync::atomic::AtomicBool;
