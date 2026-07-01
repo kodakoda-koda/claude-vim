@@ -1,6 +1,6 @@
 [package]
 name = "claude-vim"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Vim-modal wrapper for Claude Code"
 license = "MIT"
@@ -14,3 +14,4 @@ portable-pty = "0.8"
 crossterm = "0.27"
 anyhow = "1"
 signal-hook = "0.3"
+vte = "0.13"
