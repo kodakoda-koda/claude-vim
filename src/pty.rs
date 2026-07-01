@@ -1,6 +1,8 @@
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
+use crate::screen::VirtualScreen;
+
 /// smcup/rmcup などの alternate screen シーケンスをフィルタして除去する純粋関数。
 /// 入力バイト列から特定のエスケープシーケンスを削除した新しい Vec<u8> を返す。
 /// フィルタ対象:
@@ -43,6 +45,8 @@ pub struct PtySession {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
     output_rx: Receiver<Vec<u8>>,
+    /// VirtualScreen への共有参照（Visual mode で行テキストを取得するため）
+    pub screen: Arc<Mutex<VirtualScreen>>,
 }
 
 impl PtySession {
@@ -69,6 +73,10 @@ impl PtySession {
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
 
+        // VirtualScreen を生成
+        let screen = Arc::new(Mutex::new(VirtualScreen::new(cols as usize, rows as usize)));
+        let screen_clone = Arc::clone(&screen);
+
         // PTY reader スレッド
         let mut reader = pair.master.try_clone_reader()?;
         std::thread::spawn(move || {
@@ -78,6 +86,11 @@ impl PtySession {
                     Ok(0) => break,
                     Ok(n) => {
                         let filtered = filter_smcup(&buf[..n]);
+                        {
+                            if let Ok(mut s) = screen_clone.lock() {
+                                s.feed(&filtered);
+                            }
+                        }
                         if tx.send(filtered).is_err() {
                             break;
                         }
@@ -94,6 +107,7 @@ impl PtySession {
             child,
             writer,
             output_rx: rx,
+            screen,
         })
     }
 
@@ -120,6 +134,9 @@ impl PtySession {
             pixel_width: 0,
             pixel_height: 0,
         })?;
+        if let Ok(mut s) = self.screen.lock() {
+            s.resize(cols as usize, rows as usize);
+        }
         Ok(())
     }
 

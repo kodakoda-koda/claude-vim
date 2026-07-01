@@ -26,18 +26,31 @@ impl Scroller {
     }
 
     /// ScrollAmount に応じたバイト列を生成する。
+    /// count が含まれている場合はその分のイベントを連結して返す。
     pub fn scroll_bytes(&self, amount: ScrollAmount) -> Vec<u8> {
         let col = (self.cols / 2).max(1);
         let row = (self.rows / 2).max(1);
 
         match amount {
-            ScrollAmount::LineUp => sgr_scroll_event(MOUSE_SCROLL_UP, col, row),
-            ScrollAmount::LineDown => sgr_scroll_event(MOUSE_SCROLL_DOWN, col, row),
-            ScrollAmount::HalfPageUp => sgr_scroll_events(MOUSE_SCROLL_UP, col, row, half_page(self.rows)),
-            ScrollAmount::HalfPageDown => sgr_scroll_events(MOUSE_SCROLL_DOWN, col, row, half_page(self.rows)),
-            ScrollAmount::FullPageUp => sgr_scroll_events(MOUSE_SCROLL_UP, col, row, full_page(self.rows)),
-            ScrollAmount::FullPageDown => sgr_scroll_events(MOUSE_SCROLL_DOWN, col, row, full_page(self.rows)),
-            // gg → Ctrl+Home, G → Ctrl+End（マウスイベント大量送信の代わり）
+            ScrollAmount::LineUp(count) => {
+                sgr_scroll_events(MOUSE_SCROLL_UP, col, row, count as u16)
+            }
+            ScrollAmount::LineDown(count) => {
+                sgr_scroll_events(MOUSE_SCROLL_DOWN, col, row, count as u16)
+            }
+            ScrollAmount::HalfPageUp(count) => {
+                sgr_scroll_events(MOUSE_SCROLL_UP, col, row, half_page(self.rows) * (count as u16))
+            }
+            ScrollAmount::HalfPageDown(count) => {
+                sgr_scroll_events(MOUSE_SCROLL_DOWN, col, row, half_page(self.rows) * (count as u16))
+            }
+            ScrollAmount::FullPageUp(count) => {
+                sgr_scroll_events(MOUSE_SCROLL_UP, col, row, full_page(self.rows) * (count as u16))
+            }
+            ScrollAmount::FullPageDown(count) => {
+                sgr_scroll_events(MOUSE_SCROLL_DOWN, col, row, full_page(self.rows) * (count as u16))
+            }
+            // gg → Ctrl+Home, G → Ctrl+End（count 無視）
             ScrollAmount::Top => b"\x1b[1;5H".to_vec(),
             ScrollAmount::Bottom => b"\x1b[1;5F".to_vec(),
         }
@@ -80,30 +93,49 @@ mod tests {
     #[test]
     fn test_line_up() {
         let s = Scroller::new(80, 24);
-        let bytes = s.scroll_bytes(ScrollAmount::LineUp);
+        let bytes = s.scroll_bytes(ScrollAmount::LineUp(1));
         assert_eq!(bytes, b"\x1b[<64;40;12M");
     }
 
     #[test]
     fn test_line_down() {
         let s = Scroller::new(80, 24);
-        let bytes = s.scroll_bytes(ScrollAmount::LineDown);
+        let bytes = s.scroll_bytes(ScrollAmount::LineDown(1));
         assert_eq!(bytes, b"\x1b[<65;40;12M");
+    }
+
+    #[test]
+    fn test_line_down_count_3() {
+        // LineDown(3) は 3 回分のイベントを生成する
+        let s = Scroller::new(80, 24);
+        let bytes = s.scroll_bytes(ScrollAmount::LineDown(3));
+        let single = b"\x1b[<65;40;12M";
+        assert_eq!(bytes.len(), single.len() * 3);
     }
 
     #[test]
     fn test_half_page_count() {
         let s = Scroller::new(80, 24);
-        let bytes = s.scroll_bytes(ScrollAmount::HalfPageUp);
+        let bytes = s.scroll_bytes(ScrollAmount::HalfPageUp(1));
         let single = b"\x1b[<64;40;12M";
         // 24/2/3 = 4 events
         assert_eq!(bytes.len(), single.len() * 4);
     }
 
     #[test]
+    fn test_half_page_count_3() {
+        // HalfPageDown(3) は 3 倍の半ページイベントを生成する
+        let s = Scroller::new(80, 24);
+        let bytes = s.scroll_bytes(ScrollAmount::HalfPageDown(3));
+        let single = b"\x1b[<65;40;12M";
+        // (24/2/3) * 3 = 12 events
+        assert_eq!(bytes.len(), single.len() * 12);
+    }
+
+    #[test]
     fn test_full_page_count() {
         let s = Scroller::new(80, 24);
-        let bytes = s.scroll_bytes(ScrollAmount::FullPageUp);
+        let bytes = s.scroll_bytes(ScrollAmount::FullPageUp(1));
         let single = b"\x1b[<64;40;12M";
         // 24/3 = 8 events
         assert_eq!(bytes.len(), single.len() * 8);
@@ -112,7 +144,7 @@ mod tests {
     #[test]
     fn test_half_page_scales_with_rows() {
         let s = Scroller::new(80, 48);
-        let bytes = s.scroll_bytes(ScrollAmount::HalfPageDown);
+        let bytes = s.scroll_bytes(ScrollAmount::HalfPageDown(1));
         let single_len = b"\x1b[<65;40;24M".len();
         // 48/2/3 = 8 events
         assert_eq!(bytes.len(), single_len * 8);
@@ -121,7 +153,7 @@ mod tests {
     #[test]
     fn test_small_window_min_1_event() {
         let s = Scroller::new(80, 4);
-        let bytes = s.scroll_bytes(ScrollAmount::HalfPageUp);
+        let bytes = s.scroll_bytes(ScrollAmount::HalfPageUp(1));
         let single_len = b"\x1b[<64;40;2M".len();
         // 4/2/3 = 0 → max(1) = 1
         assert_eq!(bytes.len(), single_len * 1);
@@ -145,7 +177,7 @@ mod tests {
     fn test_set_size() {
         let mut s = Scroller::new(80, 24);
         s.set_size(120, 40);
-        let bytes = s.scroll_bytes(ScrollAmount::LineUp);
+        let bytes = s.scroll_bytes(ScrollAmount::LineUp(1));
         assert_eq!(bytes, b"\x1b[<64;60;20M");
     }
 }
