@@ -382,43 +382,52 @@ impl App {
         };
         let grid_rows = self.rows.saturating_sub(1) as usize;
         let cols = self.cols as usize;
-        let screen = self.pty.screen.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        // VirtualScreen から必要な行テキストをコピーしてすぐ unlock
+        let lines: Vec<(usize, String)> = {
+            let screen = self.pty.screen.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+            let lo = state.highlighted_lo;
+            let hi = state.highlighted_hi.min(grid_rows.saturating_sub(1));
+            let new_lo = match state.anchor_row {
+                None => state.cursor_row,
+                Some(a) => a.min(state.cursor_row),
+            };
+            let new_hi = match state.anchor_row {
+                None => state.cursor_row,
+                Some(a) => a.max(state.cursor_row),
+            }.min(grid_rows.saturating_sub(1));
+            let all_lo = lo.min(new_lo);
+            let all_hi = hi.max(new_hi);
+            (all_lo..=all_hi).map(|r| (r, screen.screen_line(r))).collect()
+        };
 
         let mut stdout = std::io::stdout();
         execute!(stdout, SavePosition)?;
 
         // 1. 前のハイライト行を復元
-        for row in state.highlighted_lo..=state.highlighted_hi.min(grid_rows.saturating_sub(1)) {
-            let text = screen.screen_line(row);
-            let padded = format!("{:<width$}", text, width = cols);
-            execute!(stdout, MoveTo(0, row as u16), Print(&padded))?;
+        for &(row, ref text) in &lines {
+            if row >= state.highlighted_lo && row <= state.highlighted_hi.min(grid_rows.saturating_sub(1)) {
+                let padded = format!("{:<width$}", text, width = cols);
+                execute!(stdout, MoveTo(0, row as u16), Print(&padded))?;
+            }
         }
 
         // 2. 新しいハイライトを描画
         match state.anchor_row {
             None => {
-                // Cursor mode: カーソル位置の1文字だけ反転
                 let row = state.cursor_row.min(grid_rows.saturating_sub(1));
-                let text = screen.screen_line(row);
+                let text = lines.iter().find(|(r, _)| *r == row).map(|(_, t)| t.as_str()).unwrap_or("");
                 let chars: Vec<char> = text.chars().collect();
                 let col = state.cursor_col.min(cols.saturating_sub(1));
-
-                // カーソル前の通常テキスト
                 let before: String = chars[..col.min(chars.len())].iter().collect();
-                // カーソル位置の文字（反転）
                 let cursor_ch = chars.get(col).copied().unwrap_or(' ');
-                // カーソル後の通常テキスト
-                let after: String = if col + 1 < chars.len() {
-                    chars[col + 1..].iter().collect()
-                } else {
-                    String::new()
-                };
-                let remaining = cols.saturating_sub(before.len() + 1 + after.len());
+                let after: String = if col + 1 < chars.len() { chars[col + 1..].iter().collect() } else { String::new() };
+                let remaining = cols.saturating_sub(before.chars().count() + 1 + after.chars().count());
 
                 execute!(
                     stdout,
                     MoveTo(0, row as u16),
-                    Print(format!("{before}\x1b[7m{cursor_ch}\x1b[0m{after}{}", " ".repeat(remaining))),
+                    Print(format!("{before}\x1b[7m{cursor_ch}\x1b[27m{after}{}", " ".repeat(remaining))),
                 )?;
 
                 if let Some(ref mut s) = self.cursor_state {
@@ -427,7 +436,6 @@ impl App {
                 }
             }
             Some(anchor_row) => {
-                // Visual mode: anchor から cursor まで文字単位でハイライト
                 let (start_row, start_col, end_row, end_col) =
                     if (anchor_row, state.anchor_col) <= (state.cursor_row, state.cursor_col) {
                         (anchor_row, state.anchor_col, state.cursor_row, state.cursor_col)
@@ -436,13 +444,11 @@ impl App {
                     };
 
                 for row in start_row..=end_row.min(grid_rows.saturating_sub(1)) {
-                    let text = screen.screen_line(row);
+                    let text = lines.iter().find(|(r, _)| *r == row).map(|(_, t)| t.as_str()).unwrap_or("");
                     let padded = format!("{:<width$}", text, width = cols);
                     let chars: Vec<char> = padded.chars().collect();
-
                     let hl_start = if row == start_row { start_col } else { 0 };
                     let hl_end = if row == end_row { (end_col + 1).min(cols) } else { cols };
-
                     let before: String = chars[..hl_start.min(chars.len())].iter().collect();
                     let highlighted: String = chars[hl_start.min(chars.len())..hl_end.min(chars.len())].iter().collect();
                     let after: String = chars[hl_end.min(chars.len())..].iter().collect();
@@ -450,7 +456,7 @@ impl App {
                     execute!(
                         stdout,
                         MoveTo(0, row as u16),
-                        Print(format!("{before}\x1b[7m{highlighted}\x1b[0m{after}")),
+                        Print(format!("{before}\x1b[7m{highlighted}\x1b[27m{after}")),
                     )?;
                 }
 
@@ -476,15 +482,20 @@ impl App {
         };
         let grid_rows = self.rows.saturating_sub(1) as usize;
         let cols = self.cols as usize;
-        let screen = self.pty.screen.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        let lines: Vec<(usize, String)> = {
+            let screen = self.pty.screen.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+            (state.highlighted_lo..=state.highlighted_hi.min(grid_rows.saturating_sub(1)))
+                .map(|r| (r, screen.screen_line(r)))
+                .collect()
+        };
 
         let mut stdout = std::io::stdout();
         execute!(stdout, SavePosition)?;
 
-        for row in state.highlighted_lo..=state.highlighted_hi.min(grid_rows.saturating_sub(1)) {
-            let text = screen.screen_line(row);
+        for (row, text) in &lines {
             let padded = format!("{:<width$}", text, width = cols);
-            execute!(stdout, MoveTo(0, row as u16), Print(padded))?;
+            execute!(stdout, MoveTo(0, *row as u16), Print(padded))?;
         }
 
         execute!(stdout, RestorePosition)?;
@@ -541,11 +552,18 @@ fn yank(text: &str) -> anyhow::Result<()> {
 fn yank_impl(text: &str) -> anyhow::Result<()> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
-    let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn()?;
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
     if let Some(stdin) = child.stdin.as_mut() {
         stdin.write_all(text.as_bytes())?;
     }
-    child.wait()?;
+    let status = child.wait()?;
+    if !status.success() {
+        anyhow::bail!("pbcopy failed with exit code: {:?}", status.code());
+    }
     Ok(())
 }
 
@@ -553,30 +571,38 @@ fn yank_impl(text: &str) -> anyhow::Result<()> {
 fn yank_impl(text: &str) -> anyhow::Result<()> {
     use std::io::Write as _;
     use std::process::{Command, Stdio};
-    // xclip を試みる
     let xclip = Command::new("xclip")
         .args(["-selection", "clipboard"])
         .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn();
     match xclip {
         Ok(mut child) => {
             if let Some(stdin) = child.stdin.as_mut() {
                 stdin.write_all(text.as_bytes())?;
             }
-            child.wait()?;
+            let status = child.wait()?;
+            if !status.success() {
+                anyhow::bail!("xclip failed with exit code: {:?}", status.code());
+            }
             Ok(())
         }
         Err(_) => {
-            // xclip が存在しない場合は xsel にフォールバック
             let mut child = Command::new("xsel")
                 .args(["--clipboard", "--input"])
                 .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .spawn()
                 .map_err(|e| anyhow::anyhow!("yank: xclip and xsel not found: {}", e))?;
             if let Some(stdin) = child.stdin.as_mut() {
                 stdin.write_all(text.as_bytes())?;
             }
-            child.wait()?;
+            let status = child.wait()?;
+            if !status.success() {
+                anyhow::bail!("xsel failed with exit code: {:?}", status.code());
+            }
             Ok(())
         }
     }

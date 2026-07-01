@@ -5,7 +5,7 @@ use crossterm::{
 };
 use std::io::stdout;
 
-const VERSION: &str = "cv v0.1";
+const VERSION: &str = "cv v0.2";
 
 /// cv の動作モード
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,7 +152,7 @@ mod tests {
     fn test_version_included() {
         let config = make_config(80, "main", false);
         let s = build_statusline(Mode::Normal, &config);
-        assert!(s.contains("cv v0.1"), "Expected version in: {}", s);
+        assert!(s.contains("cv v0.2"), "Expected version in: {}", s);
     }
 
     #[test]

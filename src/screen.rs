@@ -210,10 +210,16 @@ impl vte::Perform for ScreenPerformHandler<'_> {
             active[row][col] = cell;
         }
 
-        // カーソルを右に進める（折り返しは簡易対応）
         let new_col = col + 1;
         if new_col >= cols {
-            self.screen.cursor = (cols.saturating_sub(1), row);
+            let (_, bot) = self.screen.scroll_region;
+            let bot = bot.min(self.screen.rows.saturating_sub(1));
+            if row >= bot {
+                self.screen.scroll_up(1);
+                self.screen.cursor = (0, row);
+            } else {
+                self.screen.cursor = (0, row + 1);
+            }
         } else {
             self.screen.cursor = (new_col, row);
         }
