@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use crate::input::{InputAction, InputMatcher};
+use crate::input::{InputAction, InputMatcher, CursorInputAction, CursorInputMatcher, VisualInputAction, VisualInputMatcher};
 use crate::scroll::Scroller;
 use crate::pty::PtySession;
 use crate::statusline::{Mode, StatuslineConfig, render};
@@ -11,6 +11,19 @@ use crate::statusline::{Mode, StatuslineConfig, render};
 const ESC_TIMEOUT_MS: u64 = 50;
 const POLL_INTERVAL_MS: u64 = 5;
 const SCROLL_THROTTLE_MS: u64 = 50;
+
+/// Cursor/Visual mode での状態
+#[derive(Debug, Clone)]
+struct CursorState {
+    cursor_row: usize,
+    cursor_col: usize,
+    /// Visual mode の選択開始位置（None = Cursor mode）
+    anchor_row: Option<usize>,
+    anchor_col: usize,
+    /// 現在ハイライトされている行範囲（復元用）
+    highlighted_lo: usize,
+    highlighted_hi: usize,
+}
 
 /// アプリケーション全体の状態
 pub struct App {
@@ -26,6 +39,8 @@ pub struct App {
     cols: u16,
     /// 最後のスクロールイベント送信時刻（加速防止スロットル用）
     last_scroll: Instant,
+    /// Cursor/Visual mode の状態
+    cursor_state: Option<CursorState>,
 }
 
 impl App {
@@ -47,6 +62,7 @@ impl App {
             rows,
             cols,
             last_scroll: Instant::now(),
+            cursor_state: None,
         })
     }
 
@@ -143,6 +159,8 @@ impl App {
                 Ok(false)
             }
             Mode::Normal => self.handle_normal_input(bytes),
+            Mode::Cursor => self.handle_cursor_input(bytes),
+            Mode::Visual => self.handle_visual_input(bytes),
         }
     }
 
@@ -204,6 +222,10 @@ impl App {
                 self.switch_to_insert()?;
                 Ok(false)
             }
+            InputAction::EnterCursor => {
+                self.switch_to_cursor()?;
+                Ok(false)
+            }
             InputAction::Passthrough(data) => {
                 self.pty.write_bytes(&data)?;
                 Ok(false)
@@ -212,9 +234,113 @@ impl App {
         }
     }
 
+    /// Cursor mode の入力を処理する
+    fn handle_cursor_input(&mut self, bytes: Vec<u8>) -> anyhow::Result<bool> {
+        let action = CursorInputMatcher::new().process(&bytes);
+        let grid_rows = self.rows.saturating_sub(1) as usize;
+        let grid_cols = self.cols as usize;
+        match action {
+            CursorInputAction::MoveDown => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.cursor_row = (state.cursor_row + 1).min(grid_rows.saturating_sub(1));
+                }
+                self.redraw_cursor_highlight()?;
+                Ok(false)
+            }
+            CursorInputAction::MoveUp => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.cursor_row = state.cursor_row.saturating_sub(1);
+                }
+                self.redraw_cursor_highlight()?;
+                Ok(false)
+            }
+            CursorInputAction::MoveRight => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.cursor_col = (state.cursor_col + 1).min(grid_cols.saturating_sub(1));
+                }
+                self.redraw_cursor_highlight()?;
+                Ok(false)
+            }
+            CursorInputAction::MoveLeft => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.cursor_col = state.cursor_col.saturating_sub(1);
+                }
+                self.redraw_cursor_highlight()?;
+                Ok(false)
+            }
+            CursorInputAction::EnterVisual => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.anchor_row = Some(state.cursor_row);
+                    state.anchor_col = state.cursor_col;
+                }
+                self.mode = Mode::Visual;
+                render(self.mode, &self.statusline_config, self.rows.saturating_sub(1))?;
+                self.redraw_cursor_highlight()?;
+                let _ = std::io::stdout().flush();
+                Ok(false)
+            }
+            CursorInputAction::Cancel => {
+                self.restore_highlighted_rows()?;
+                self.switch_to_normal()?;
+                Ok(false)
+            }
+            CursorInputAction::Noop => Ok(false),
+        }
+    }
+
+    /// Visual mode の入力を処理する
+    fn handle_visual_input(&mut self, bytes: Vec<u8>) -> anyhow::Result<bool> {
+        let action = VisualInputMatcher::new().process(&bytes);
+        let grid_rows = self.rows.saturating_sub(1) as usize;
+        let grid_cols = self.cols as usize;
+        match action {
+            VisualInputAction::MoveDown => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.cursor_row = (state.cursor_row + 1).min(grid_rows.saturating_sub(1));
+                }
+                self.redraw_cursor_highlight()?;
+                Ok(false)
+            }
+            VisualInputAction::MoveUp => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.cursor_row = state.cursor_row.saturating_sub(1);
+                }
+                self.redraw_cursor_highlight()?;
+                Ok(false)
+            }
+            VisualInputAction::MoveRight => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.cursor_col = (state.cursor_col + 1).min(grid_cols.saturating_sub(1));
+                }
+                self.redraw_cursor_highlight()?;
+                Ok(false)
+            }
+            VisualInputAction::MoveLeft => {
+                if let Some(ref mut state) = self.cursor_state {
+                    state.cursor_col = state.cursor_col.saturating_sub(1);
+                }
+                self.redraw_cursor_highlight()?;
+                Ok(false)
+            }
+            VisualInputAction::Yank => {
+                self.do_yank()?;
+                self.restore_highlighted_rows()?;
+                self.switch_to_normal()?;
+                Ok(false)
+            }
+            VisualInputAction::Cancel => {
+                self.restore_highlighted_rows()?;
+                self.switch_to_normal()?;
+                Ok(false)
+            }
+            VisualInputAction::Noop => Ok(false),
+        }
+    }
+
     fn switch_to_normal(&mut self) -> anyhow::Result<()> {
         self.mode = Mode::Normal;
         self.input_matcher = InputMatcher::new();
+        self.cursor_state = None;
         render(self.mode, &self.statusline_config, self.rows.saturating_sub(1))?;
         let _ = std::io::stdout().flush();
         Ok(())
@@ -227,4 +353,236 @@ impl App {
         let _ = std::io::stdout().flush();
         Ok(())
     }
+
+    fn switch_to_cursor(&mut self) -> anyhow::Result<()> {
+        let grid_rows = self.rows.saturating_sub(1) as usize;
+        let start_row = grid_rows / 2;
+        self.cursor_state = Some(CursorState {
+            cursor_row: start_row,
+            cursor_col: 0,
+            anchor_row: None,
+            anchor_col: 0,
+            highlighted_lo: start_row,
+            highlighted_hi: start_row,
+        });
+        self.mode = Mode::Cursor;
+        render(self.mode, &self.statusline_config, self.rows.saturating_sub(1))?;
+        self.redraw_cursor_highlight()?;
+        let _ = std::io::stdout().flush();
+        Ok(())
+    }
+
+    /// 前のハイライトを復元してから新しいハイライトを描画する
+    fn redraw_cursor_highlight(&mut self) -> anyhow::Result<()> {
+        use crossterm::{cursor::{MoveTo, RestorePosition, SavePosition}, execute, style::Print};
+
+        let state = match &self.cursor_state {
+            Some(s) => s.clone(),
+            None => return Ok(()),
+        };
+        let grid_rows = self.rows.saturating_sub(1) as usize;
+        let cols = self.cols as usize;
+        let screen = self.pty.screen.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        let mut stdout = std::io::stdout();
+        execute!(stdout, SavePosition)?;
+
+        // 1. 前のハイライト行を復元
+        for row in state.highlighted_lo..=state.highlighted_hi.min(grid_rows.saturating_sub(1)) {
+            let text = screen.screen_line(row);
+            let padded = format!("{:<width$}", text, width = cols);
+            execute!(stdout, MoveTo(0, row as u16), Print(&padded))?;
+        }
+
+        // 2. 新しいハイライトを描画
+        match state.anchor_row {
+            None => {
+                // Cursor mode: カーソル位置の1文字だけ反転
+                let row = state.cursor_row.min(grid_rows.saturating_sub(1));
+                let text = screen.screen_line(row);
+                let chars: Vec<char> = text.chars().collect();
+                let col = state.cursor_col.min(cols.saturating_sub(1));
+
+                // カーソル前の通常テキスト
+                let before: String = chars[..col.min(chars.len())].iter().collect();
+                // カーソル位置の文字（反転）
+                let cursor_ch = chars.get(col).copied().unwrap_or(' ');
+                // カーソル後の通常テキスト
+                let after: String = if col + 1 < chars.len() {
+                    chars[col + 1..].iter().collect()
+                } else {
+                    String::new()
+                };
+                let remaining = cols.saturating_sub(before.len() + 1 + after.len());
+
+                execute!(
+                    stdout,
+                    MoveTo(0, row as u16),
+                    Print(format!("{before}\x1b[7m{cursor_ch}\x1b[0m{after}{}", " ".repeat(remaining))),
+                )?;
+
+                if let Some(ref mut s) = self.cursor_state {
+                    s.highlighted_lo = row;
+                    s.highlighted_hi = row;
+                }
+            }
+            Some(anchor_row) => {
+                // Visual mode: anchor から cursor まで文字単位でハイライト
+                let (start_row, start_col, end_row, end_col) =
+                    if (anchor_row, state.anchor_col) <= (state.cursor_row, state.cursor_col) {
+                        (anchor_row, state.anchor_col, state.cursor_row, state.cursor_col)
+                    } else {
+                        (state.cursor_row, state.cursor_col, anchor_row, state.anchor_col)
+                    };
+
+                for row in start_row..=end_row.min(grid_rows.saturating_sub(1)) {
+                    let text = screen.screen_line(row);
+                    let padded = format!("{:<width$}", text, width = cols);
+                    let chars: Vec<char> = padded.chars().collect();
+
+                    let hl_start = if row == start_row { start_col } else { 0 };
+                    let hl_end = if row == end_row { (end_col + 1).min(cols) } else { cols };
+
+                    let before: String = chars[..hl_start.min(chars.len())].iter().collect();
+                    let highlighted: String = chars[hl_start.min(chars.len())..hl_end.min(chars.len())].iter().collect();
+                    let after: String = chars[hl_end.min(chars.len())..].iter().collect();
+
+                    execute!(
+                        stdout,
+                        MoveTo(0, row as u16),
+                        Print(format!("{before}\x1b[7m{highlighted}\x1b[0m{after}")),
+                    )?;
+                }
+
+                if let Some(ref mut s) = self.cursor_state {
+                    s.highlighted_lo = start_row;
+                    s.highlighted_hi = end_row;
+                }
+            }
+        }
+
+        execute!(stdout, RestorePosition)?;
+        stdout.flush()?;
+        Ok(())
+    }
+
+    /// ハイライトされた行を VirtualScreen のオリジナル内容で復元する
+    fn restore_highlighted_rows(&self) -> anyhow::Result<()> {
+        use crossterm::{cursor::{MoveTo, RestorePosition, SavePosition}, execute, style::Print};
+
+        let state = match &self.cursor_state {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        let grid_rows = self.rows.saturating_sub(1) as usize;
+        let cols = self.cols as usize;
+        let screen = self.pty.screen.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        let mut stdout = std::io::stdout();
+        execute!(stdout, SavePosition)?;
+
+        for row in state.highlighted_lo..=state.highlighted_hi.min(grid_rows.saturating_sub(1)) {
+            let text = screen.screen_line(row);
+            let padded = format!("{:<width$}", text, width = cols);
+            execute!(stdout, MoveTo(0, row as u16), Print(padded))?;
+        }
+
+        execute!(stdout, RestorePosition)?;
+        stdout.flush()?;
+        Ok(())
+    }
+
+    /// yank: 選択テキストをクリップボードにコピーする（文字単位）
+    fn do_yank(&mut self) -> anyhow::Result<()> {
+        let state = match &self.cursor_state {
+            Some(s) => s.clone(),
+            None => return Ok(()),
+        };
+        let anchor_row = match state.anchor_row {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        let cols = self.cols as usize;
+        let grid_rows = self.rows.saturating_sub(1) as usize;
+        let screen = self.pty.screen.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        let (start_row, start_col, end_row, end_col) =
+            if (anchor_row, state.anchor_col) <= (state.cursor_row, state.cursor_col) {
+                (anchor_row, state.anchor_col, state.cursor_row, state.cursor_col)
+            } else {
+                (state.cursor_row, state.cursor_col, anchor_row, state.anchor_col)
+            };
+
+        let mut result = String::new();
+        for row in start_row..=end_row.min(grid_rows.saturating_sub(1)) {
+            let text = screen.screen_line(row);
+            let chars: Vec<char> = text.chars().collect();
+            let from = if row == start_row { start_col } else { 0 };
+            let to = if row == end_row { (end_col + 1).min(chars.len()) } else { cols.min(chars.len()) };
+            let slice: String = chars[from.min(chars.len())..to.min(chars.len())].iter().collect();
+            if row > start_row {
+                result.push('\n');
+            }
+            result.push_str(slice.trim_end());
+        }
+
+        drop(screen);
+        yank(&result)?;
+        Ok(())
+    }
+}
+
+/// テキストをクリップボードにコピーする
+fn yank(text: &str) -> anyhow::Result<()> {
+    yank_impl(text)
+}
+
+#[cfg(target_os = "macos")]
+fn yank_impl(text: &str) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    child.wait()?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn yank_impl(text: &str) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    // xclip を試みる
+    let xclip = Command::new("xclip")
+        .args(["-selection", "clipboard"])
+        .stdin(Stdio::piped())
+        .spawn();
+    match xclip {
+        Ok(mut child) => {
+            if let Some(stdin) = child.stdin.as_mut() {
+                stdin.write_all(text.as_bytes())?;
+            }
+            child.wait()?;
+            Ok(())
+        }
+        Err(_) => {
+            // xclip が存在しない場合は xsel にフォールバック
+            let mut child = Command::new("xsel")
+                .args(["--clipboard", "--input"])
+                .stdin(Stdio::piped())
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("yank: xclip and xsel not found: {}", e))?;
+            if let Some(stdin) = child.stdin.as_mut() {
+                stdin.write_all(text.as_bytes())?;
+            }
+            child.wait()?;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn yank_impl(_text: &str) -> anyhow::Result<()> {
+    anyhow::bail!("yank: unsupported platform")
 }
